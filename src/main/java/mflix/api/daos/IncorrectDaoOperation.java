@@ -19,9 +19,9 @@ public class IncorrectDaoOperation extends RuntimeException {
   /**
    * Creates a exception for incorrect Dao layer operations.
    *
-   * @param message - inflicting string message that originated the error.
+   * @param user_preferences_is_null
    */
-  public IncorrectDaoOperation(final String message) {
-    super(message);
+  public IncorrectDaoOperation(String user_preferences_is_null) {
+    super(user_preferences_is_null);
   }
 }

@@ -1,11 +1,14 @@
 package mflix.api.daos;
 
-import com.mongodb.MongoClientSettings;
-import com.mongodb.MongoWriteException;
-import com.mongodb.ReadConcern;
+import com.mongodb.*;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoCursor;
 import com.mongodb.client.model.Aggregates;
+
+import static com.mongodb.client.model.Accumulators.sum;
+import static com.mongodb.client.model.Filters.*;
+
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.Updates;
@@ -25,9 +28,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.text.MessageFormat;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
+import java.util.*;
+import java.util.logging.Filter;
 
 import static org.bson.codecs.configuration.CodecRegistries.fromProviders;
 import static org.bson.codecs.configuration.CodecRegistries.fromRegistries;
@@ -84,7 +86,19 @@ public class CommentDao extends AbstractMFlixDao {
     // comment.
     // TODO> Ticket - Handling Errors: Implement a try catch block to
     // handle a potential write exception when given a wrong commentId.
-    return null;
+    if (!Optional.ofNullable(comment.getId()).isPresent()) {
+      throw new IncorrectDaoOperation("must set comment id");
+    }
+
+    try {
+      commentCollection.withWriteConcern(WriteConcern.MAJORITY).insertOne(comment);
+    } catch (MongoException e) {
+      if(ErrorCategory.fromErrorCode(e.getCode()) == ErrorCategory.DUPLICATE_KEY) {
+        throw new IncorrectDaoOperation("comment is already in the database");
+      }
+      return null;
+    }
+    return comment;
   }
 
   /**
@@ -106,7 +120,22 @@ public class CommentDao extends AbstractMFlixDao {
     // user own comments
     // TODO> Ticket - Handling Errors: Implement a try catch block to
     // handle a potential write exception when given a wrong commentId.
-    return false;
+
+    Bson commentsIdFilter = Filters.in("_id", new ObjectId(commentId));
+    try {
+      if (Optional.ofNullable(commentCollection.find(commentsIdFilter).first()).isPresent()) {
+        if (Objects.equals(commentCollection.find(commentsIdFilter).first().getEmail() ,email)) {
+          commentCollection.updateOne(commentsIdFilter, new Document("$set", new Document("text", text)));
+        } else {
+          return false;
+        }
+      } else {
+        return false;
+      }
+    } catch (MongoException e) {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -122,7 +151,21 @@ public class CommentDao extends AbstractMFlixDao {
     // TIP: make sure to match only users that own the given commentId
     // TODO> Ticket Handling Errors - Implement a try catch block to
     // handle a potential write exception when given a wrong commentId.
-    return false;
+    Bson commentsIdFilter = Filters.in("_id", new ObjectId(commentId));
+    try {
+      if (Optional.ofNullable(commentCollection.find(commentsIdFilter).first()).isPresent()) {
+        if (Objects.equals(commentCollection.find(commentsIdFilter).first().getEmail() ,email)) {
+            commentCollection.deleteOne(commentsIdFilter);
+        } else {
+          return false;
+        }
+      } else {
+        return false;
+      }
+    } catch (MongoException e) {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -140,6 +183,16 @@ public class CommentDao extends AbstractMFlixDao {
     // // guarantee for the returned documents. Once a commenter is in the
     // // top 20 of users, they become a Critic, so mostActive is composed of
     // // Critic objects.
+
+    Bson sortStage = Aggregates.sortByCount("$email");
+    Bson limitStage = Aggregates.limit(20);
+
+    List<Bson> pipeline = new LinkedList<>();
+    pipeline.add(sortStage);
+    pipeline.add(limitStage);
+
+    commentCollection.withReadConcern(ReadConcern.MAJORITY).aggregate(pipeline, Critic.class).iterator()
+            .forEachRemaining(mostActive::add);
     return mostActive;
   }
 }
